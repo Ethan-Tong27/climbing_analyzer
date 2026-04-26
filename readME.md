@@ -4,34 +4,40 @@ BetaBot Analyzer is a lightweight computer vision tool that uses YOLOv8 Pose est
 
 ## 🚀 How to Use
 
+### 0. Install Dependencies
+Install the required packages:
+
+```bash
+pip install opencv-python numpy ultralytics
+```
+
 ### 1. Setup Folder Structure
 Place the script in your working directory. When run, the script will automatically look for (or create) a folder named `video_data`.
 
-```text
+```
 BetaBot-Project/
 ├── betabot.py
 └── video_data/
     ├── my_climb.mp4
     └── project_attempt.mov
-2. Run the Analyzer
+```
+
+### 2. Run the Analyzer
 Execute the script from your terminal:
 
-Bash
+```bash
 python betabot.py
-3. Controls & Output
-Resize Window: The analysis displays in a pop-up window. You can click and drag the corners to fit your screen.
+```
 
-Stop Early: Press q while the video window is focused to stop.
+### 3. Controls & Output
+- **Resize Window**: The analysis displays in a pop-up window. You can click and drag the corners to fit your screen.
+- **Stop Early**: Press `q` while the video window is focused to stop.
+- **Saved Videos**: Analyzed videos are saved in the `video_data` folder with the prefix `analyzed_`.
 
-Saved Videos: Analyzed videos are saved in the video_data folder with the prefix analyzed_.
-
-📊 Data Output (climbing_data.csv)
+## 📊 Data Output (climbing_data.csv)
 The exported CSV file contains the following columns for analysis:
 
-Frame: The current video frame number.
-
-CoM_X / CoM_Y: The calculated Center of Mass coordinates.
-
-L_Elbow / R_Elbow: The interior angle of the elbows (ideal for analyzing "straight arm" technique).
-
-Velocity: The speed of the CoM movement (measured in pixels/frame).
+- **Frame**: The current video frame number.
+- **CoM_X / CoM_Y**: The calculated Center of Mass coordinates.
+- **L_Elbow / R_Elbow**: The interior angle of the elbows (ideal for analyzing "straight arm" technique).
+- **Velocity**: The speed of the CoM movement (measured in pixels/frame).
