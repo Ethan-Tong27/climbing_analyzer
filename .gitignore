@@ -1,0 +1,15 @@
+# Ignore video files
+*.mp4
+*.mov
+*.MOV
+*.MP4
+video_data/
+
+# Ignore YOLO model weights
+*.pt
+
+# Ignore generated data logs
+*.csv
+
+# Ignore Python cache
+__pycache__/
