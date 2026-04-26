@@ -11,10 +11,11 @@ Add Videos:
 Drop your raw climbing videos (.mp4 or .mov) into the video_data folder.
 
 Run the Analyzer:
-Execute the script from your terminal:
 
-Bash
+Execute the script from your terminal:
 python betabot.py
+
+
 Controls & Output:
 
 The analysis will display in a pop-up window. You can click and drag the corners to resize the window to fit your screen perfectly.
@@ -33,4 +34,3 @@ CoM_X / CoM_Y: The calculated Center of Mass coordinates.
 L_Elbow / R_Elbow: The interior angle of the elbows (useful for analyzing "straight arm" efficiency).
 
 Velocity: The speed of the CoM movement between frames (measured in pixels/frame).
-"""
