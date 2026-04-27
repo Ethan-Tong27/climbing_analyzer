@@ -210,10 +210,14 @@ class BetaBotAnalyzer:
                     cv2.putText(frame, f"Stability: {'Stable' if self.velocity < 10 else 'Dynamic'}", 
                                 (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 3)
                     
+                    # Display Position & Velocity in Black
+                    cv2.putText(frame, f"X: {self.prev_com[0]:.1f}", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                    cv2.putText(frame, f"Y: {self.prev_com[1]:.1f}", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                    cv2.putText(frame, f"Velocity: {self.velocity:.1f} px/f", (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                    
                     # Display Angles
-                    cv2.putText(frame, f"L-Arm: {int(l_angle)}deg", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                    cv2.putText(frame, f"R-Arm: {int(r_angle)}deg", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                    cv2.putText(frame, f"Speed: {self.velocity:.1f} px/f", (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.putText(frame, f"L-Arm: {int(l_angle)}deg", (50, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                    cv2.putText(frame, f"R-Arm: {int(r_angle)}deg", (50, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
 
                     # 4. Log Data for Engineering Analysis
                     self.logs.append([frame_count, self.prev_com[0], self.prev_com[1], l_angle, r_angle, self.velocity])
