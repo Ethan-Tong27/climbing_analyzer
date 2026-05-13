@@ -1,9 +1,5 @@
 import cv2
 import numpy as np
-import time
-import csv
-import os
-import subprocess
 from pathlib import Path
 from typing import List, Tuple, Optional, Any
 from ultralytics import YOLO
@@ -14,46 +10,37 @@ class BetaBotAnalyzer:
     L_ELBOW, R_ELBOW = 7, 8
     L_WRIST, R_WRIST = 9, 10
     L_HIP, R_HIP = 11, 12
+    L_KNEE, R_KNEE = 13, 14
+    L_ANKLE, R_ANKLE = 15, 16
     
     # --- Drawing Constants ---
-    COLOR_TRAIL = (0, 255, 255)      # Yellow
     COLOR_SKELETON = (0, 255, 0)     # Green
     COLOR_JOINTS = (0, 255, 255)     # Cyan
-    COLOR_STABLE = (0, 255, 0)       # Green
-    COLOR_DYNAMIC = (0, 0, 255)      # Red
-    COLOR_TEXT = (0, 0, 0)           # Black
+    COLOR_COM = (0, 0, 255)          # Red
+    COLOR_TRAIL = (0, 255, 255)      # Yellow
+    COLOR_STABLE = (0, 255, 0)       # Green for stable
+    COLOR_UNSTABLE = (0, 0, 255)     # Red for unstable
+    
+    STABILITY_THRESHOLD = 5.0        # Pixels per frame
+    TRAIL_LENGTH = 120               # Number of COM points to keep
+    KEYPOINT_SMOOTH_FRAMES = 5       # Number of frames to smooth over
 
-    def __init__(self, smoothing_factor: float = 0.15):
-        self.model = YOLO("yolov8n-pose.pt")
-        self.smoothing_factor = smoothing_factor
-        self.max_trail_length = 500
-        self.reset()
+    def __init__(self):
+        self.model = YOLO("yolov8m-pose.pt")
+        self.prev_com: Optional[np.ndarray] = None
+        self.com_trail: List[np.ndarray] = []
+        self.com_displacement = 0.0
+        self.keypoint_history: List[np.ndarray] = []
 
     def reset(self) -> None:
         """Resets the state for processing a new video."""
         self.prev_com: Optional[np.ndarray] = None
-        self.velocity: float = 0.0
-        self.com_trail: List[Tuple[int, int]] = []
-        self.logs: List[List[Any]] = []
-
-    def smooth_value(self, current: np.ndarray, previous: Optional[np.ndarray]) -> np.ndarray:
-        """Applies an Exponential Moving Average (EMA) low-pass filter."""
-        if previous is None:
-            return current
-        return (self.smoothing_factor * current) + (1 - self.smoothing_factor) * previous
-
-    def calculate_angle(self, a: Any, b: Any, c: Any) -> float:
-        """Calculates the interior angle between three coordinate points."""
-        if a is None or b is None or c is None:
-            return 0.0
-            
-        a, b, c = np.array(a[:2]), np.array(b[:2]), np.array(c[:2])
-        radians = np.arctan2(c[1] - b[1], c[0] - b[0]) - np.arctan2(a[1] - b[1], a[0] - b[0])
-        angle = np.abs(radians * 180.0 / np.pi)
-        return angle if angle <= 180.0 else 360 - angle
+        self.com_trail: List[np.ndarray] = []
+        self.com_displacement = 0.0
+        self.keypoint_history: List[np.ndarray] = []
 
     def get_com(self, keypoints: List[Any]) -> Optional[np.ndarray]:
-        """Calculates Center of Mass using weighted centroid of key body points."""
+        """Calculates Center of Mass using weighted center of key body points."""
         if len(keypoints) < 13:
             return None
         
@@ -68,102 +55,116 @@ class BetaBotAnalyzer:
             
         return np.mean(valid_points, axis=0)
 
-    def draw_motion_trail(self, frame: np.ndarray, com_position: Optional[np.ndarray]) -> np.ndarray:
-        """Draws a fading motion trail representing the Center of Mass path."""
-        if com_position is None:
-            return frame
+    def is_com_stable(self) -> bool:
+        """Determines if COM is stable based on displacement from previous frame."""
+        return self.com_displacement < self.STABILITY_THRESHOLD
+
+    def smooth_keypoints(self, keypoints: np.ndarray) -> np.ndarray:
+        """Applies smoothing to keypoints using a buffer of recent frames."""
+        self.keypoint_history.append(keypoints.copy())
         
-        self.com_trail.append(tuple(map(int, com_position)))
+        # Keep only recent frames
+        if len(self.keypoint_history) > self.KEYPOINT_SMOOTH_FRAMES:
+            self.keypoint_history.pop(0)
         
-        if len(self.com_trail) > self.max_trail_length:
-            self.com_trail.pop(0)
-        
-        for i in range(1, len(self.com_trail)):
-            pt1 = self.com_trail[i - 1]
-            pt2 = self.com_trail[i]
-            alpha = i / len(self.com_trail)
-            thickness = max(2, int(8 * alpha))
-            cv2.line(frame, pt1, pt2, self.COLOR_TRAIL, thickness)
-        
-        return frame
+        # Average keypoints over the buffer
+        smoothed = np.mean(self.keypoint_history, axis=0)
+        return smoothed
 
     def draw_skeleton(self, frame: np.ndarray, keypoints: List[Any]) -> np.ndarray:
-        """Draws skeleton keypoints and connections."""
+        """Draws skeleton keypoints and connections"""
         connections = [
-            (0, 1), (0, 2), (1, 3), (2, 4),                     # Head
-            (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),            # Arms
-            (5, 11), (6, 12), (11, 12),                         # Torso
-            (11, 13), (13, 15), (12, 14), (14, 16)              # Legs
+            (5, 6),           # Shoulders
+            (5, 7), (7, 9),   # Left arm
+            (6, 8), (8, 10),  # Right arm
+            (5, 11), (6, 12), # Shoulders to hips
+            (11, 12),         # Hips
+            (11, 13), (13, 15),  # Left leg (hip -> knee -> ankle)
+            (12, 14), (14, 16)   # Right leg (hip -> knee -> ankle)
         ]
         
+        # Draw connections
         for start, end in connections:
-            if start < len(keypoints) and end < len(keypoints):
-                if keypoints[start] is not None and keypoints[end] is not None:
+            if (start < len(keypoints) and end < len(keypoints) and
+                keypoints[start] is not None and keypoints[end] is not None):
+                # Verify confidence is above threshold
+                start_conf = keypoints[start][2] if len(keypoints[start]) > 2 else 1.0
+                end_conf = keypoints[end][2] if len(keypoints[end]) > 2 else 1.0
+                
+                if start_conf > 0.1 and end_conf > 0.1:
                     pt1 = tuple(map(int, keypoints[start][:2]))
                     pt2 = tuple(map(int, keypoints[end][:2]))
                     cv2.line(frame, pt1, pt2, self.COLOR_SKELETON, 2)
         
+        # Draw joints
         for kpt in keypoints:
             if kpt is not None:
-                pt = tuple(map(int, kpt[:2]))
-                cv2.circle(frame, pt, 4, self.COLOR_JOINTS, -1)
+                conf = kpt[2] if len(kpt) > 2 else 1.0
+                if conf > 0.1:
+                    pt = tuple(map(int, kpt[:2]))
+                    cv2.circle(frame, pt, 4, self.COLOR_JOINTS, -1)
         
         return frame
 
-    def render_overlay(self, frame: np.ndarray, keypoints: List[Any], l_angle: float, r_angle: float) -> np.ndarray:
-        """Applies all visual overlays to the frame."""
+    def render_overlay(self, frame: np.ndarray, keypoints: List[Any]) -> np.ndarray:
+        """Applies visual overlays to the frame."""
         frame = self.draw_skeleton(frame, keypoints)
-        frame = self.draw_motion_trail(frame, self.prev_com)
         
+        # Draw COM trail
+        if len(self.com_trail) > 1:
+            for i in range(len(self.com_trail) - 1):
+                pt1 = tuple(map(int, self.com_trail[i]))
+                pt2 = tuple(map(int, self.com_trail[i + 1]))
+                # Fade the trail by varying alpha
+                alpha = (i + 1) / len(self.com_trail)
+                color_alpha = tuple(int(c * alpha) for c in self.COLOR_TRAIL)
+                cv2.line(frame, pt1, pt2, color_alpha, 4)
+        
+        # Draw COM circle
         if self.prev_com is not None:
             com_px = (int(self.prev_com[0]), int(self.prev_com[1]))
-            state_color = self.COLOR_STABLE if self.velocity < 10 else self.COLOR_DYNAMIC
-            state_text = 'Stable' if self.velocity < 10 else 'Dynamic'
-            
-            cv2.circle(frame, com_px, 8, state_color, -1)
-            cv2.putText(frame, f"Stability: {state_text}", (50, 50), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, state_color, 3)
-            
-            texts = [
-                f"X: {self.prev_com[0]:.1f}",
-                f"Y: {self.prev_com[1]:.1f}",
-                f"Velocity: {self.velocity:.1f} px/f",
-                f"L-Arm: {int(l_angle)}deg",
-                f"R-Arm: {int(r_angle)}deg"
-            ]
-            
-            for i, text in enumerate(texts):
-                y_offset = 90 + (i * 30)
-                cv2.putText(frame, text, (50, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, self.COLOR_TEXT, 2)
+            com_color = self.COLOR_STABLE if self.is_com_stable() else self.COLOR_UNSTABLE
+            cv2.circle(frame, com_px, 6, com_color, -1)
+            cv2.circle(frame, com_px, 8, com_color, 2)
+        
+        # Draw stability status text
+        stability_text = "STABLE" if self.is_com_stable() else "UNSTABLE"
+        stability_color = self.COLOR_STABLE if self.is_com_stable() else self.COLOR_UNSTABLE
+        cv2.putText(frame, f"COM: {stability_text}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.7, stability_color, 2)
+        cv2.putText(frame, f"Disp: {self.com_displacement:.1f}px", (10, 60), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
                 
         return frame
-
-    def analyze_frame(self, frame: np.ndarray, frame_count: int) -> np.ndarray:
-        """Processes a single frame: runs YOLO, computes kinematics, and draws overlays."""
+    #Processes a single frame: runs YOLO, computes kinematics, and draws overlays.
+    def analyze_frame(self, frame: np.ndarray) -> np.ndarray:
         results = self.model(frame, verbose=False)
         
         if results[0].keypoints is None or len(results[0].keypoints.xy) == 0:
             return frame
 
         keypoints = results[0].keypoints.xy[0].cpu().numpy()
+        
+        # Apply smoothing
+        keypoints = self.smooth_keypoints(keypoints)
+        
         raw_com = self.get_com(keypoints)
         
-        l_angle, r_angle = 0.0, 0.0
-        
         if raw_com is not None:
+            # Calculate displacement from previous COM
             if self.prev_com is not None:
-                self.velocity = float(np.linalg.norm(raw_com - self.prev_com))
+                self.com_displacement = np.linalg.norm(raw_com - self.prev_com)
+            else:
+                self.com_displacement = 0.0
             
-            self.prev_com = self.smooth_value(raw_com, self.prev_com)
+            self.prev_com = raw_com
             
-            if len(keypoints) > self.L_WRIST:
-                l_angle = self.calculate_angle(keypoints[self.L_SHOULDER], keypoints[self.L_ELBOW], keypoints[self.L_WRIST])
-            if len(keypoints) > self.R_WRIST:
-                r_angle = self.calculate_angle(keypoints[self.R_SHOULDER], keypoints[self.R_ELBOW], keypoints[self.R_WRIST])
-                
-            self.logs.append([frame_count, self.prev_com[0], self.prev_com[1], l_angle, r_angle, self.velocity])
+            # Update trail
+            self.com_trail.append(raw_com.copy())
+            if len(self.com_trail) > self.TRAIL_LENGTH:
+                self.com_trail.pop(0)
 
-        return self.render_overlay(frame, keypoints, l_angle, r_angle)
+        return self.render_overlay(frame, keypoints)
 
     def process_video(self, input_video_path: Path, output_video_path: Path) -> None:
         """Reads, processes, and exports a climbing video."""
@@ -177,14 +178,13 @@ class BetaBotAnalyzer:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = int(cap.get(cv2.CAP_PROP_FPS))
-        output_fps = min(120, max(fps, 30))
         
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(output_video_path), fourcc, output_fps, (width, height))
+        out = cv2.VideoWriter(str(output_video_path), fourcc, fps, (width, height))
         
         window_name = 'Climbing Analysis'
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, 960, 540)
+        cv2.resizeWindow(window_name, 540, 960)  # iPhone portrait resolution (9:16 aspect ratio)
         
         print(f"Processing '{input_video_path.name}'... Press 'q' to stop early.")
         frame_count = 0
@@ -196,7 +196,7 @@ class BetaBotAnalyzer:
                     break 
 
                 frame_count += 1
-                processed_frame = self.analyze_frame(frame, frame_count)
+                processed_frame = self.analyze_frame(frame)
 
                 if processed_frame.shape[1] != width or processed_frame.shape[0] != height:
                     processed_frame = cv2.resize(processed_frame, (width, height), interpolation=cv2.INTER_LINEAR)
@@ -211,54 +211,8 @@ class BetaBotAnalyzer:
             cap.release()
             out.release()
             cv2.destroyAllWindows()
-            time.sleep(0.5) 
             
-        self.save_logs(input_video_path.stem)
-        self.fix_video_metadata(output_video_path)
         print(f"Finished! Output video saved as '{output_video_path}'")
-
-    def save_logs(self, video_stem: str) -> None:
-        """Exports the kinematic data to a CSV file."""
-        if not self.logs:
-            print("No data to save.")
-            return
-            
-        csv_filename = f"{video_stem}_climbing_data.csv"
-        with open(csv_filename, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Frame', 'CoM_X', 'CoM_Y', 'L_Elbow', 'R_Elbow', 'Velocity'])
-            writer.writerows(self.logs)
-        print(f"Telemetry data saved to '{csv_filename}'")
-
-    def fix_video_metadata(self, video_path: Path) -> None:
-        """Uses ffmpeg to properly encode MP4 with correct aspect ratio metadata."""
-        if not video_path.exists():
-            return
-        
-        try:
-            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            print("FFmpeg not found - skipping metadata optimization.")
-            return
-        
-        temp_path = video_path.with_name(f"{video_path.stem}_temp{video_path.suffix}")
-        
-        cmd = [
-            'ffmpeg', '-i', str(video_path),
-            '-c:v', 'libx264', '-crf', '18',
-            '-c:a', 'aac', '-y', str(temp_path)
-        ]
-        
-        try:
-            print("Optimizing video metadata with ffmpeg...")
-            subprocess.run(cmd, capture_output=True, check=True)
-            video_path.unlink()  # Remove original
-            temp_path.rename(video_path)  # Rename temp to original
-            print("Video metadata optimized!")
-        except subprocess.CalledProcessError as e:
-            print(f"FFmpeg error: {e}")
-            if temp_path.exists():
-                temp_path.unlink()
 
 if __name__ == "__main__":
     analyzer = BetaBotAnalyzer()
