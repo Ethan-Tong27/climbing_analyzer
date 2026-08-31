@@ -1,8 +1,8 @@
-# BetaBot Analyzer 🧗‍♂️
+# BetaBot Analyzer 
 
 BetaBot Analyzer is a lightweight computer vision tool that uses YOLOv8 Pose estimation to analyze rock climbing biomechanics. It automatically processes climbing videos to track the climber's center of mass (CoM), evaluate joint efficiency, and visualize motion trails in real-time. 
 
-## 🚀 How to Use
+##  How to Use
 
 ### 0. Install Dependencies
 Install the required packages:
@@ -34,7 +34,7 @@ python betabot.py
 - **Stop Early**: Press `q` while the video window is focused to stop.
 - **Saved Videos**: Analyzed videos are saved in the `video_data` folder with the prefix `analyzed_`.
 
-## 📊 Data Output (climbing_data.csv)
+##  Data Output (climbing_data.csv)
 The exported CSV file contains the following columns for analysis:
 
 - **Frame**: The current video frame number.
